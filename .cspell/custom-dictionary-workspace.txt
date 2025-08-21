@@ -2,6 +2,7 @@
 accepteula
 auditd
 ausearch
+autorun
 autoruns
 auxww
 AVML
@@ -10,6 +11,7 @@ blockdev
 btmp
 cmdline
 conv
+DCOM
 EVIDENCEPATH
 evtx
 ewfacquire
@@ -21,6 +23,7 @@ Guymager
 HKCU
 HKLM
 Imager
+Intune
 journalctl
 keygen
 lastlog
@@ -36,6 +39,9 @@ pslist
 psloggedon
 pstree
 resolv
+rgba
+SCCM
+Spearphishing
 sysinfo
 tcpview
 tuln
