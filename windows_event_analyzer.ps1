@@ -33,7 +33,6 @@ param(
 $ScriptVersion = "0.1Beta"
 $ScriptName = "windows_event_analyzer.ps1"
 $Author = "Taz Wake"
-$CreatedDate = Get-Date -Format "yyyy-MM-dd"
 
 # Global variables
 $Global:AnalysisResults = @{
@@ -218,7 +217,7 @@ function Get-ProcessCreationEvents {
         $processEvents = @()
         $eventCount = 0
         
-        foreach ($event in $events) {
+        foreach ($eventRecord in $events) {
             $eventCount++
             if ($eventCount % 100 -eq 0) {
                 Write-StatusMessage -Level "INFO" -Message "Processing event $eventCount of $($events.Count)..."
@@ -227,13 +226,13 @@ function Get-ProcessCreationEvents {
             try {
                 # Extract relevant information from the event
                 $eventData = @{
-                    TimeCreated = $event.TimeCreated
-                    EventID = $event.Id
-                    LogonID = $event.Properties[7].Value  # Logon ID field
-                    ProcessName = $event.Properties[5].Value  # New Process Name
-                    CommandLine = $event.Properties[8].Value  # Command Line
-                    ComputerName = $event.MachineName
-                    EventRecordID = $event.RecordId
+                    TimeCreated = $eventRecord.TimeCreated
+                    EventID = $eventRecord.Id
+                    LogonID = $eventRecord.Properties[7].Value  # Logon ID field
+                    ProcessName = $eventRecord.Properties[5].Value  # New Process Name
+                    CommandLine = $eventRecord.Properties[8].Value  # Command Line
+                    ComputerName = $eventRecord.MachineName
+                    EventRecordID = $eventRecord.RecordId
                 }
                 
                 # Validate Logon ID
@@ -241,11 +240,11 @@ function Get-ProcessCreationEvents {
                     $processEvents += $eventData
                 }
                 else {
-                    Write-StatusMessage -Level "WARNING" -Message "Event $($event.RecordId) has invalid Logon ID: $($eventData.LogonID)"
+                    Write-StatusMessage -Level "WARNING" -Message "Event $($eventRecord.RecordId) has invalid Logon ID: $($eventData.LogonID)"
                 }
             }
             catch {
-                Write-StatusMessage -Level "WARNING" -Message "Failed to parse event $($event.RecordId): $($_.Exception.Message)"
+                Write-StatusMessage -Level "WARNING" -Message "Failed to parse event $($eventRecord.RecordId): $($_.Exception.Message)"
                 continue
             }
         }
@@ -276,7 +275,7 @@ function Get-LogonEvents {
         $logonEvents = @()
         $eventCount = 0
         
-        foreach ($event in $events) {
+        foreach ($eventRecord in $events) {
             $eventCount++
             if ($eventCount % 100 -eq 0) {
                 Write-StatusMessage -Level "INFO" -Message "Processing event $eventCount of $($events.Count)..."
@@ -285,14 +284,14 @@ function Get-LogonEvents {
             try {
                 # Extract relevant information from the event
                 $eventData = @{
-                    TimeCreated = $event.TimeCreated
-                    EventID = $event.Id
-                    LogonID = $event.Properties[7].Value  # Logon ID field
-                    LogonType = $event.Properties[8].Value  # Logon Type
-                    UserName = $event.Properties[5].Value  # Account Name
-                    Domain = $event.Properties[6].Value  # Account Domain
-                    ComputerName = $event.MachineName
-                    EventRecordID = $event.RecordId
+                    TimeCreated = $eventRecord.TimeCreated
+                    EventID = $eventRecord.Id
+                    LogonID = $eventRecord.Properties[7].Value  # Logon ID field
+                    LogonType = $eventRecord.Properties[8].Value  # Logon Type
+                    UserName = $eventRecord.Properties[5].Value  # Account Name
+                    Domain = $eventRecord.Properties[6].Value  # Account Domain
+                    ComputerName = $eventRecord.MachineName
+                    EventRecordID = $eventRecord.RecordId
                 }
                 
                 # Validate Logon ID
@@ -300,11 +299,11 @@ function Get-LogonEvents {
                     $logonEvents += $eventData
                 }
                 else {
-                    Write-StatusMessage -Level "WARNING" -Message "Event $($event.RecordId) has invalid Logon ID: $($eventData.LogonID)"
+                    Write-StatusMessage -Level "WARNING" -Message "Event $($eventRecord.RecordId) has invalid Logon ID: $($eventData.LogonID)"
                 }
             }
             catch {
-                Write-StatusMessage -Level "WARNING" -Message "Failed to parse event $($event.RecordId): $($_.Exception.Message)"
+                Write-StatusMessage -Level "WARNING" -Message "Failed to parse event $($eventRecord.RecordId): $($_.Exception.Message)"
                 continue
             }
         }

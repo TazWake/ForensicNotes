@@ -1,5 +1,6 @@
 # Custom Dictionary Words
 accepteula
+artefacts
 auditd
 ausearch
 autorun
@@ -42,10 +43,12 @@ resolv
 rgba
 SCCM
 Spearphishing
+summarises
 sysinfo
 tcpview
 tuln
 tulnpa
+unauthorised
 wevtutil
 winpmem
 wtmp
