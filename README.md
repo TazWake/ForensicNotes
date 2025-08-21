@@ -40,6 +40,16 @@ This repository serves as a centralised collection of:
 - **Security focus**: Highlights potential security risks and missing authentication events
 - **Requirements**: PowerShell 5.1+, access to security.evtx files
 
+### Static Binary Analyzer (`static_binary_analyzer.py`) - Version 1.0
+
+- **Safe static analysis** of suspicious binary files without execution
+- **Cross-platform support**: Analyzes both Windows and Linux executables
+- **Multiple analysis tools**: Integrates file, strings, exiftool, objdump, readelf
+- **Security indicators**: Identifies suspicious patterns and security concerns
+- **VirusTotal integration**: Hash lookup capability with manual URL generation
+- **Comprehensive output**: Generates detailed analysis reports in multiple formats
+- **Requirements**: Linux system with Python 3.6+, standard Linux tools
+
 ### macOS Evidence Collection (`macos_data_collection.sh`) - Version 0.1
 
 - **macOS-specific** evidence collection with security awareness
@@ -56,6 +66,7 @@ ForensicNotes/
 ├── linux_data_collection.sh      # Linux evidence collection (v2.1)
 ├── windows_data_collection.ps1   # Windows evidence collection (v0.1)
 ├── windows_event_analyzer.ps1    # Windows event log analyzer (v0.1Beta)
+├── static_binary_analyzer.py     # Static binary analyzer (v1.0)
 ├── macos_data_collection.sh      # macOS evidence collection (v0.1)
 ├── old/                          # Legacy scripts and documentation
 │   ├── linux_data_collection_V1.sh  # Original Linux script
@@ -74,6 +85,7 @@ ForensicNotes/
 - **Linux**: Full-featured evidence collection with modern tools
 - **Windows**: PowerShell-based collection with Sysinternals integration
 - **macOS**: Security-aware collection with protection bypass documentation
+- **Binary Analysis**: Cross-platform executable analysis (Windows/Linux binaries)
 
 ### Evidence Collection Capabilities
 
@@ -84,6 +96,7 @@ ForensicNotes/
 - **System Logs**: Traditional logs, Unified Logs (macOS), audit logs
 - **File Integrity**: SHA256/MD5 hashing of all collected evidence
 - **Recent Executables**: Files modified in last 5 days with hashes
+- **Binary Analysis**: Static analysis, string extraction, metadata analysis, security indicators
 
 ### Security and Compliance
 
@@ -128,6 +141,13 @@ sudo ./linux_data_collection.sh /path/to/evidence/storage
 sudo ./macos_data_collection.sh /path/to/evidence/storage
 ```
 
+### Static Binary Analysis
+
+```bash
+python3 static_binary_analyzer.py suspicious_file.exe
+python3 static_binary_analyzer.py malware.bin -o /tmp/analysis -v
+```
+
 ## 🔍 Evidence Output
 
 All scripts generate:
@@ -137,6 +157,14 @@ All scripts generate:
 - **Detailed collection logs** with timestamps and status messages
 - **Evidence summaries** documenting what was collected and limitations
 - **Security risk assessments** (e.g., unprotected SSH keys)
+
+The Static Binary Analyzer additionally generates:
+
+- **Strings analysis** with extracted printable strings
+- **Metadata analysis** including file properties and system information
+- **Binary structure analysis** with ELF/PE file details
+- **Security indicators** highlighting suspicious patterns
+- **VirusTotal integration** with hash lookup capabilities
 
 ## 🤝 Contributing
 
@@ -165,6 +193,17 @@ This repository welcomes contributions:
 ## ⚖️ License
 
 This repository is licensed under the terms specified in the `LICENSE` file. Please review the license before using any scripts or tools.
+
+## 🚀 Future Enhancements
+
+### Static Binary Analyzer Roadmap
+
+- **Direct VirusTotal API Integration**: Automated submission and result parsing
+- **LLM Analysis Submission**: AI-powered analysis of analysis results
+- **Enhanced Malware Detection**: Machine learning-based threat detection
+- **Network Behavior Analysis**: Static analysis of network-related code patterns
+- **Sandbox Integration**: Safe execution environment for dynamic analysis
+- **Threat Intelligence**: Integration with multiple threat intelligence platforms
 
 ## ⚠️ Disclaimer
 
