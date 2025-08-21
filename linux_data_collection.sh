@@ -2,7 +2,7 @@
 
 # ================================================================================================================================= #
 # Linux Evidence Collection Script                                                                                                  #
-# Version: 2.0                                                                                                                      #
+# Version: 2.1                                                                                                                      #
 # Description: Advanced incident response evidence collection script for Linux hosts                                                #                             #
 #              Uses tools like AVML for memory capture and improved process enumeration                                             #                     #
 # Requirements: Root privileges, AVML, Linux tools (ss, lsof, etc.)                                                                 #
@@ -438,6 +438,48 @@ collect_user_history() {
             cp "/home/$user/.ssh/config" "$user_dir/ssh_config.txt" 2>/dev/null || echo "Failed to copy SSH config" > "$user_dir/ssh_config.txt"
             log_hash "$user_dir/ssh_config.txt" "sha256"
         fi
+        
+        # Check SSH private keys for password protection
+        if [[ -d "/home/$user/.ssh" ]]; then
+            local ssh_keys_file="$user_dir/ssh_private_keys_analysis.txt"
+            echo "=== SSH PRIVATE KEY ANALYSIS FOR USER: $user ===" > "$ssh_keys_file"
+            echo "Collection Time: $(date)" >> "$ssh_keys_file"
+            echo "" >> "$ssh_keys_file"
+            
+            # Find all private key files
+            local private_keys=$(find "/home/$user/.ssh" -type f -name "id_*" -not -name "*.pub" 2>/dev/null)
+            
+            if [[ -n "$private_keys" ]]; then
+                echo "Found private keys:" >> "$ssh_keys_file"
+                echo "" >> "$ssh_keys_file"
+                
+                for key_file in $private_keys; do
+                    local key_name=$(basename "$key_file")
+                    local key_hash=$(sha256sum "$key_file" 2>/dev/null | cut -d' ' -f1)
+                    
+                    echo "Key: $key_name" >> "$ssh_keys_file"
+                    echo "Path: $key_file" >> "$ssh_keys_file"
+                    echo "SHA256: $key_hash" >> "$ssh_keys_file"
+                    
+                    # Test if key has no password (suppress errors)
+                    if ssh-keygen -y -f "$key_file" -P "" >/dev/null 2>&1; then
+                        echo "Password Protection: NO PASSWORD SET - SECURITY RISK!" >> "$ssh_keys_file"
+                        print_status "WARNING" "SSH key without password found: $key_file for user $user"
+                        log_hash "$key_file" "sha256"
+                    else
+                        echo "Password Protection: PASSWORD SET (secure)" >> "$ssh_keys_file"
+                        print_status "INFO" "SSH key with password found: $key_file for user $user"
+                        log_hash "$key_file" "sha256"
+                    fi
+                    
+                    echo "" >> "$ssh_keys_file"
+                done
+            else
+                echo "No private SSH keys found." >> "$ssh_keys_file"
+            fi
+            
+            log_hash "$ssh_keys_file" "sha256"
+        fi
     done
     
     # Root user history (if different location)
@@ -446,6 +488,48 @@ collect_user_history() {
         mkdir -p "$root_dir"
         cp "/root/.bash_history" "$root_dir/bash_history.txt" 2>/dev/null || echo "Failed to copy root bash history" > "$root_dir/bash_history.txt"
         log_hash "$root_dir/bash_history.txt" "sha256"
+    fi
+    
+    # Check root user SSH private keys for password protection
+    if [[ -d "/root/.ssh" ]]; then
+        local root_ssh_keys_file="$history_dir/root/ssh_private_keys_analysis.txt"
+        echo "=== SSH PRIVATE KEY ANALYSIS FOR ROOT USER ===" > "$root_ssh_keys_file"
+        echo "Collection Time: $(date)" >> "$root_ssh_keys_file"
+        echo "" >> "$root_ssh_keys_file"
+        
+        # Find all private key files
+        local root_private_keys=$(find "/root/.ssh" -type f -name "id_*" -not -name "*.pub" 2>/dev/null)
+        
+        if [[ -n "$root_private_keys" ]]; then
+            echo "Found private keys:" >> "$root_ssh_keys_file"
+            echo "" >> "$root_ssh_keys_file"
+            
+            for key_file in $root_private_keys; do
+                local key_name=$(basename "$key_file")
+                local key_hash=$(sha256sum "$key_file" 2>/dev/null | cut -d' ' -f1)
+                
+                echo "Key: $key_name" >> "$root_ssh_keys_file"
+                echo "Path: $key_file" >> "$root_ssh_keys_file"
+                echo "SHA256: $key_hash" >> "$root_ssh_keys_file"
+                
+                # Test if key has no password (suppress errors)
+                if ssh-keygen -y -f "$key_file" -P "" >/dev/null 2>&1; then
+                    echo "Password Protection: NO PASSWORD SET - SECURITY RISK!" >> "$root_ssh_keys_file"
+                    print_status "WARNING" "SSH key without password found: $key_file for root user"
+                    log_hash "$key_file" "sha256"
+                else
+                    echo "Password Protection: PASSWORD SET (secure)" >> "$root_ssh_keys_file"
+                    print_status "INFO" "SSH key with password found: $key_file for root user"
+                    log_hash "$key_file" "sha256"
+                fi
+                
+                echo "" >> "$root_ssh_keys_file"
+            done
+        else
+            echo "No private SSH keys found." >> "$root_ssh_keys_file"
+        fi
+        
+        log_hash "$root_ssh_keys_file" "sha256"
     fi
     
     print_status "SUCCESS" "User history files collected in: $history_dir"
