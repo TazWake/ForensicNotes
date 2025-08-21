@@ -28,6 +28,14 @@ This repository serves as a centralised collection of:
 - **Best practices**: Follows PowerShell naming conventions and security practices
 - **Requirements**: PowerShell 5.1+, Administrator privileges
 
+### Windows Event Log Analyzer (`windows_event_analyzer.ps1`) - Version 0.1Beta
+- **Security event log analysis** for Windows systems
+- **Anomaly detection**: Identifies process creation events without corresponding logon events
+- **Event correlation**: Cross-references Event ID 4688 (Process Creation) with Event ID 4624 (Logon)
+- **Multiple output formats**: HTML reports, CSV exports, detailed logging
+- **Security focus**: Highlights potential security risks and missing authentication events
+- **Requirements**: PowerShell 5.1+, access to security.evtx files
+
 ### macOS Evidence Collection (`macos_data_collection.sh`) - Version 0.1
 - **macOS-specific** evidence collection with security awareness
 - **Security protection handling**: SIP, T2 chip, FileVault considerations
@@ -42,6 +50,7 @@ This repository serves as a centralised collection of:
 ForensicNotes/
 ├── linux_data_collection.sh      # Linux evidence collection (v2.1)
 ├── windows_data_collection.ps1   # Windows evidence collection (v0.1)
+├── windows_event_analyzer.ps1    # Windows event log analyzer (v0.1Beta)
 ├── macos_data_collection.sh      # macOS evidence collection (v0.1)
 ├── old/                          # Legacy scripts and documentation
 │   ├── linux_data_collection_V1.sh  # Original Linux script
