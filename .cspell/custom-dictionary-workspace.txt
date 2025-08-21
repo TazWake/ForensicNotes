@@ -1,0 +1,16 @@
+# Custom Dictionary Words
+accepteula
+autoruns
+Belkasoft
+evtx
+ftkimager
+Guymager
+HKCU
+HKLM
+Imager
+procexp
+pslist
+psloggedon
+tcpview
+wevtutil
+winpmem
