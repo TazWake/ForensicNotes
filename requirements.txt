@@ -1,0 +1,15 @@
+# Windows Event Log Analyzer - Python Version
+# Requirements file for easy dependency installation
+
+# Core dependency - REQUIRED for parsing Windows .evtx files
+evtx>=1.6.1
+
+# Optional dependencies for enhanced functionality
+pandas>=1.3.0          # Enhanced CSV handling and data manipulation
+jinja2>=3.0.0          # Enhanced HTML template rendering
+
+# Development dependencies (optional)
+# pytest>=6.0.0         # For running tests
+# black>=21.0.0         # Code formatting
+# flake8>=3.8.0         # Code linting
+

@@ -72,5 +72,4 @@ This document summarises lateral movement tactics known on the Windows platform.
 
 **How to Hunt:** Monitor configuration changes, unexpected deployments, new package activities, or remote executions initiated by deployment servers.
 
----
-
+--

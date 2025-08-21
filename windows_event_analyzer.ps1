@@ -363,8 +363,8 @@ function Find-Anomalies {
     Write-StatusMessage -Level "SUCCESS" -Message "Analysis completed. Found $($anomalies.Count) anomalies"
 }
 
-# Function to generate HTML report
-function Generate-HTMLReport {
+# Function to export HTML report
+function Export-HTMLReport {
     param()
     
     Write-StatusMessage -Level "INFO" -Message "Generating HTML report..."
@@ -494,8 +494,8 @@ function Generate-HTMLReport {
     Write-StatusMessage -Level "SUCCESS" -Message "HTML report generated: $htmlReport"
 }
 
-# Function to generate summary report
-function Generate-SummaryReport {
+# Function to export summary report
+function Export-SummaryReport {
     param()
     
     Write-StatusMessage -Level "INFO" -Message "Generating summary report..."
@@ -605,8 +605,8 @@ function Main {
         Find-Anomalies
         
         # Generate reports
-        Generate-HTMLReport
-        Generate-SummaryReport
+        Export-HTMLReport
+        Export-SummaryReport
         
         # Show results
         Show-FinalResults

@@ -13,6 +13,7 @@ btmp
 cmdline
 conv
 DCOM
+devel
 EVIDENCEPATH
 evtx
 ewfacquire
@@ -42,6 +43,7 @@ pstree
 resolv
 rgba
 SCCM
+setuptools
 Spearphishing
 summarises
 sysinfo
@@ -49,6 +51,8 @@ tcpview
 tuln
 tulnpa
 unauthorised
+venv
 wevtutil
+winevt
 winpmem
 wtmp
