@@ -1,13 +1,14 @@
 #!/bin/bash
 
-# =============================================================================
-# Modern Linux Evidence Collection Script
-# Version: 2.0
-# Description: Advanced incident response evidence collection script for Linux hosts
-#              Uses modern tools like AVML for memory capture and improved process enumeration
-# Requirements: Root privileges, AVML, modern Linux tools (ss, lsof, etc.)
-# Usage: sudo ./linux_data_collection.sh /path/to/storage/device
-# =============================================================================
+# ================================================================================================================================= #
+# Linux Evidence Collection Script                                                                                                  #
+# Version: 2.0                                                                                                                      #
+# Description: Advanced incident response evidence collection script for Linux hosts                                                #                             #
+#              Uses tools like AVML for memory capture and improved process enumeration                                             #                     #
+# Requirements: Root privileges, AVML, Linux tools (ss, lsof, etc.)                                                                 #
+# Usage: sudo ./linux_data_collection.sh /path/to/storage/device                                                                    #
+# Note: This script is designed to work on RHEL and Ubuntu systems. It may have unexpected behavior on other distributions.         #
+# ================================================================================================================================= #
 
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
