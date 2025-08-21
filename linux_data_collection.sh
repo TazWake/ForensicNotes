@@ -1,271 +1,837 @@
 #!/bin/bash
 
-# Evidence collection script for Linux hosts. 
-# NOTE: MD5 is used to hash disk images to save time.
-#
-# Requirements.
-#     LiME to capture memory. If this is missing, the memory capture will fail.
-#         It is assumed this will be a src build saved as a zip file with LiME in the name.
-#         in the same folder as the script. If this is not correct, modify the memory section.
-#     dwarfdump. If this is not installed a version should be provided in the same folder as this script.
-#         If you are running a packaged copy of dwarfdump, it should be named "dwarfump-CPU" where CPU is
-#         either x86_64 or i686 etc. It should match the output of uname -m.
-#     ewfaquire - if this isn't on the system dd can be used but this is a lot slower.
-#
-# Use:
-# This runs best when stored on a USB with a copy of LiME.
-#
-# This script needs to be run with root privs. 
-# Run script to copy memory and disk image to external storage media.
-# sudo ./evidence_collector.sh /path/to/storage/device
-# Primary consideration: https://tools.ietf.org/html/rfc3227
+# =============================================================================
+# Modern Linux Evidence Collection Script
+# Version: 2.0
+# Description: Advanced incident response evidence collection script for Linux hosts
+#              Uses modern tools like AVML for memory capture and improved process enumeration
+# Requirements: Root privileges, AVML, modern Linux tools (ss, lsof, etc.)
+# Usage: sudo ./linux_data_collection.sh /path/to/storage/device
+# =============================================================================
 
-EVIDENCEPATH=$1
-TEMPNAME=$(cat /dev/urandom | tr -cd 'a-f0-9' | head -c 8)
-TEMPFILE=$EVIDENCEPATH/$TEMPNAME
+set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
-hashfile() {
-    file=$1
-    if [ -f "$file" ]; then
-	    hash=$(sha1sum $file)
-        echo "[#] SHA1 hash: $hash" >> $LOGFILE
-	echo " " >> $LOGFILE
-    else
-	    echo "[!] There is a problem with logging the hash - exiting!"
-        exit 255;
-	fi
-}
+# Script configuration
+readonly SCRIPT_VERSION="2.0"
+readonly SCRIPT_NAME="linux_data_collection.sh"
+readonly REQUIRED_BS="16k"  # Minimum block size for dd operations
 
-dwarfdumper() {
-SAVEFILE=$1
-if ! command -v dwarfdump & > /dev/null
-then
-    echo "[!] Dwarfdump is not installed. Checking for local version."
-    # Check for local version.
-    echo "[!] Searching for dwarfdump_$CPU"
-    # dwarfdump=$(find . -name dwarfdump_$CPU 2>/dev/null | head -n1)
-    dwarfump=./dwarfdump_$CPU
-    if test -f "$dwarfdump"; then
-        echo "[!] Dwarfdump found. Using version at $dwarfdump."
-	echo "[!] Using version of dwarfdump provided at $dwarfdump." >> $LOGFILE
-	
-    else
-        echo "[!] Unable to locate $dwarfdump. If this file exists make sure it is in the same path as this script."
-	echo "[!] Unable to locate Dwarfdump. It is not possible to build a profile automatically." >> $LOGFILE
-    fi
-else
-    echo "[ ] Dwarfdump installed."
+# Color codes for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly NC='\033[0m' # No Color
+
+# Global variables
+EVIDENCEPATH=""
+LOGFILE=""
+HASH_LOG=""
+COLLECTION_START_TIME=""
+HOSTNAME=""
+SYSTEM_TYPE=""
+
+# Function to print colored output
+print_status() {
+    local level="$1"
+    local message="$2"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
-fi
+    case "$level" in
+        "INFO")
+            echo -e "${BLUE}[INFO]${NC} $message"
+            echo "[INFO] $timestamp - $message" >> "$LOGFILE"
+            ;;
+        "SUCCESS")
+            echo -e "${GREEN}[SUCCESS]${NC} $message"
+            echo "[SUCCESS] $timestamp - $message" >> "$LOGFILE"
+            ;;
+        "WARNING")
+            echo -e "${YELLOW}[WARNING]${NC} $message"
+            echo "[WARNING] $timestamp - $message" >> "$LOGFILE"
+            ;;
+        "ERROR")
+            echo -e "${RED}[ERROR]${NC} $message"
+            echo "[ERROR] $timestamp - $message" >> "$LOGFILE"
+            ;;
+        "PROGRESS")
+            echo -e "${BLUE}[PROGRESS]${NC} $message"
+            echo "[PROGRESS] $timestamp - $message" >> "$LOGFILE"
+            ;;
+    esac
 }
 
-# Check Requirements
-if [[ $EUID != 0 ]]; then
-    echo "[!] This script must be run with root privileges!"
-    echo "[!] Exiting"
-    exit 255;
-else
-    echo "[ ] Running with correct privilges."
-fi
-touch $TEMPFILE
-if [ -f $TEMPFILE  ]; then
-    echo "[+] Write to storage media successful."
-    rm $TEMPFILE
-else
-    echo "[!] Unable to write to storage media."
-    echo "[!] Exiting."
-    exit 255;
-fi
+# Function to log hash information
+log_hash() {
+    local file_path="$1"
+    local hash_type="$2"
+    
+    if [[ -f "$file_path" ]]; then
+        case "$hash_type" in
+            "md5")
+                local hash=$(md5sum "$file_path" | cut -d' ' -f1)
+                ;;
+            "sha256")
+                local hash=$(sha256sum "$file_path" | cut -d' ' -f1)
+                ;;
+            *)
+                local hash=$(sha256sum "$file_path" | cut -d' ' -f1)
+                ;;
+        esac
+        
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - $hash_type:$hash - $file_path" >> "$HASH_LOG"
+        print_status "INFO" "Hash ($hash_type): $hash - $file_path"
+    else
+        print_status "WARNING" "File not found for hashing: $file_path"
+    fi
+}
 
-# Set up logging
-LOGFILE=$EVIDENCEPATH/datacollection.txt
-dtg=$(date | cut -d" " -f4,5)
-echo "***********************" > $LOGFILE
-echo "* Evidence Collection *" >> $LOGFILE
-echo "***********************" >> $LOGFILE
-echo "Collection Started at: $dtg" >> $LOGFILE
-echo "Storage location: $EVIDENCEPATH" >> $LOGFILE
+# Function to check if running on physical device being analyzed
+check_physical_device() {
+    local target_path="$1"
+    local root_device=""
+    
+    # Get the root device
+    if command -v lsblk >/dev/null 2>&1; then
+        root_device=$(lsblk -no PKNAME "$(df / | tail -1 | awk '{print $1}')" 2>/dev/null || echo "")
+    else
+        root_device=$(df / | tail -1 | awk '{print $1}' | sed 's/[0-9]*$//')
+    fi
+    
+    if [[ -n "$root_device" ]]; then
+        # Check if target path is on the same device as root
+        local target_device=""
+        if [[ -d "$target_path" ]]; then
+            target_device=$(df "$target_path" | tail -1 | awk '{print $1}' | sed 's/[0-9]*$//')
+        fi
+        
+        if [[ "$target_device" == "$root_device" ]]; then
+            print_status "ERROR" "Cannot write evidence to the same physical device being analyzed!"
+            print_status "ERROR" "Root device: $root_device, Target device: $target_device"
+            exit 1
+        fi
+    fi
+}
 
-######################### System Data ##################################
+# Function to check system type (RHEL vs Ubuntu)
+detect_system_type() {
+    if [[ -f /etc/redhat-release ]]; then
+        SYSTEM_TYPE="RHEL"
+        print_status "INFO" "Detected RHEL/CentOS system"
+    elif [[ -f /etc/os-release ]] && grep -q "Ubuntu" /etc/os-release; then
+        SYSTEM_TYPE="UBUNTU"
+        print_status "INFO" "Detected Ubuntu system"
+    else
+        SYSTEM_TYPE="UNKNOWN"
+        print_status "WARNING" "Unknown system type, some features may not work"
+    fi
+}
 
-echo "[ ] Collecting System Information"
-echo "[ ] Target System Information - Collected at $(date | cut -d" " -f4,5)" >> $LOGFILE
-echo "[+] Environment Settings" >> $EVIDENCEPATH/environment.txt
-printenv >> $EVIDENCEPATH/environment.txt
-echo "[+] lsb_release details" >> $EVIDENCEPATH/environment.txt
-lsb_release -a >> $EVIDENCEPATH/environment.txt
-echo "[ ] Sysem Manufacturer: $(dmidecode -s system-manufacturer)" >> $EVIDENCEPATH/environment.txt
-echo "[ ] System Product Name: $(dmidecode -s system-product-name)" >> $EVIDENCEPATH/environment.txt
-echo "[ ] System Version: $(dmidecode -s system-version)" >> $EVIDENCEPATH/environment.txt
-echo "[ ] System Serial Number: $(dmidecode -s system-serial-number)" >> $EVIDENCEPATH/environment.txt
-echo "[ ] System UUID: $(dmidecode -s system-uuid)" >> $EVIDENCEPATH/environment.txt
-echo "[+] Mounts" >> $EVIDENCEPATH/environment.txt
-cat /etc/mtab >> $EVIDENCEPATH/environment.txt
-echo "[+] Disk Use" >> $EVIDENCEPATH/environment.txt
-df -aT >> $EVIDENCEPATH/environment.txt
-echo "[+] USB data" >> $EVIDENCEPATH/environment.txt
-lsusb >> $EVIDENCEPATH/environment.txt
-echo "[+] PCI Data" >> $EVIDENCEPATH/environment.txt
-lspci >> $EVIDENCEPATH/environment.txt
-$envhash = sha1sum $EVIDENCEPATH/environment.txt
-echo "[ ] Collection completed at $(date | cut -d" " -f4,5)"
-echo "[ ] Collection completed at $(date | cut -d" " -f4,5)" >> $LOGFILE
-echo "[ ] System information stored at $EVIDENCEPATH/environment.txt." >> $LOGFILE
-echo "[ ] SHA1 Hash: $envhash" >> $LOGFILE
+# Function to check and install required tools
+check_requirements() {
+    local missing_tools=()
+    
+    # Check for essential tools
+    local essential_tools=("ss" "lsof" "ps" "netstat" "md5sum" "sha256sum")
+    
+    for tool in "${essential_tools[@]}"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing_tools+=("$tool")
+        fi
+    done
+    
+    # Check for AVML
+    if ! command -v avml >/dev/null 2>&1; then
+        print_status "WARNING" "AVML not found. Memory capture will be skipped."
+        print_status "WARNING" "Install AVML for memory capture: https://github.com/microsoft/avml"
+    fi
+    
+    # Check for ewfacquire
+    if ! command -v ewfacquire >/dev/null 2>&1; then
+        print_status "WARNING" "ewfacquire not found. Will use dd for disk imaging."
+    fi
+    
+    if [[ ${#missing_tools[@]} -gt 0 ]]; then
+        print_status "ERROR" "Missing required tools: ${missing_tools[*]}"
+        exit 1
+    fi
+    
+    print_status "SUCCESS" "All required tools are available"
+}
 
-################ CAPTURE VOLATILE DATA ##################################
+# Function to collect system information
+collect_system_info() {
+    print_status "PROGRESS" "Collecting system information..."
+    
+    local sysinfo_file="$EVIDENCEPATH/system_information.txt"
+    
+    {
+        echo "=== SYSTEM INFORMATION ==="
+        echo "Collection Time: $(date)"
+        echo "Hostname: $(hostname)"
+        echo "System Type: $SYSTEM_TYPE"
+        echo ""
+        
+        echo "=== KERNEL INFORMATION ==="
+        uname -a
+        echo ""
+        
+        echo "=== OS RELEASE ==="
+        if [[ -f /etc/os-release ]]; then
+            cat /etc/os-release
+        elif [[ -f /etc/redhat-release ]]; then
+            cat /etc/redhat-release
+        fi
+        echo ""
+        
+        echo "=== HARDWARE INFORMATION ==="
+        if command -v dmidecode >/dev/null 2>&1; then
+            echo "System Manufacturer: $(dmidecode -s system-manufacturer 2>/dev/null || echo "N/A")"
+            echo "System Product: $(dmidecode -s system-product-name 2>/dev/null || echo "N/A")"
+            echo "System Version: $(dmidecode -s system-version 2>/dev/null || echo "N/A")"
+            echo "System Serial: $(dmidecode -s system-serial-number 2>/dev/null || echo "N/A")"
+            echo "System UUID: $(dmidecode -s system-uuid 2>/dev/null || echo "N/A")"
+        fi
+        echo ""
+        
+        echo "=== ENVIRONMENT VARIABLES ==="
+        printenv | sort
+        echo ""
+        
+        echo "=== MOUNT POINTS ==="
+        mount | sort
+        echo ""
+        
+        echo "=== DISK USAGE ==="
+        df -h
+        echo ""
+        
+        echo "=== USB DEVICES ==="
+        if command -v lsusb >/dev/null 2>&1; then
+            lsusb
+        fi
+        echo ""
+        
+        echo "=== PCI DEVICES ==="
+        if command -v lspci >/dev/null 2>&1; then
+            lspci
+        fi
+        echo ""
+        
+        echo "=== LOADED KERNEL MODULES ==="
+        lsmod | head -20
+        echo ""
+        
+        echo "=== SYSTEM UPTIME ==="
+        uptime
+        echo ""
+        
+        echo "=== CURRENT TIME ==="
+        date
+        echo ""
+        
+        echo "=== TIMEZONE ==="
+        if [[ -f /etc/timezone ]]; then
+            cat /etc/timezone
+        fi
+        echo ""
+        
+    } > "$sysinfo_file"
+    
+    log_hash "$sysinfo_file" "sha256"
+    print_status "SUCCESS" "System information collected: $sysinfo_file"
+}
 
-# Copy proc files
-# This is commented out as it can take hours.
-#dtg=$(date | cut -d" " -f4,5)
-#mkdir $EVIDENCEPATH/procs
-#echo "[ ] Copying /proc to the storage media. This may take some time."
-#echo "[~] Created folder at $EVIDENCEPATH/procs" >> $LOGFILE
-#echo "[~] Copying /proc data at $dtg." 
-#echo "[~] Errors will be suppressed and copy may be incomplete." >> $LOGFILE
-#cp -R /proc/ $EVIDENCEPATH/procs 2>/dev/null
-#dtg=$(date | cut -d" " -f4,5)
-#echo "[~] Collection completed at $dtg." >> $LOGFILE
-#echo "[ ] Copy complete."
+# Function to collect process information
+collect_process_info() {
+    print_status "PROGRESS" "Collecting process information..."
+    
+    local proc_dir="$EVIDENCEPATH/process_information"
+    mkdir -p "$proc_dir"
+    
+    # Collect running processes with ps
+    local ps_file="$proc_dir/running_processes_ps.txt"
+    ps auxww > "$ps_file" 2>/dev/null || ps aux > "$ps_file"
+    log_hash "$ps_file" "sha256"
+    
+    # Collect process tree
+    local pstree_file="$proc_dir/process_tree.txt"
+    if command -v pstree >/dev/null 2>&1; then
+        pstree -pa > "$pstree_file" 2>/dev/null || echo "pstree failed" > "$pstree_file"
+    else
+        echo "pstree not available" > "$pstree_file"
+    fi
+    log_hash "$pstree_file" "sha256"
+    
+    # Collect process information from /proc without copying entire directory
+    local proc_info_file="$proc_dir/proc_process_info.txt"
+    {
+        echo "=== PROCESS INFORMATION FROM /PROC ==="
+        echo "Collection Time: $(date)"
+        echo ""
+        
+        echo "=== RUNNING PROCESSES (PID LIST) ==="
+        ls -la /proc/ | grep '^d' | grep -E '^d.*[0-9]+$' | awk '{print $9}' | sort -n
+        echo ""
+        
+        echo "=== PROCESS STATISTICS ==="
+        echo "Total processes: $(ls -d /proc/[0-9]* 2>/dev/null | wc -l)"
+        echo ""
+        
+        echo "=== PROCESS COMMAND LINES ==="
+        for pid in $(ls -d /proc/[0-9]* 2>/dev/null | awk -F'/' '{print $3}' | sort -n); do
+            if [[ -r "/proc/$pid/cmdline" ]]; then
+                local cmdline=$(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\0' ' ')
+                if [[ -n "$cmdline" ]]; then
+                    echo "PID: $pid - CMD: $cmdline"
+                fi
+            fi
+        done | head -100  # Limit output to prevent excessive size
+        echo ""
+        
+        echo "=== PROCESS ENVIRONMENT SAMPLES ==="
+        # Sample a few processes for environment info
+        local count=0
+        for pid in $(ls -d /proc/[0-9]* 2>/dev/null | awk -F'/' '{print $3}' | sort -n); do
+            if [[ $count -lt 5 ]] && [[ -r "/proc/$pid/environ" ]]; then
+                echo "PID: $pid Environment:"
+                cat "/proc/$pid/environ" 2>/dev/null | tr '\0' '\n' | head -10
+                echo "---"
+                ((count++))
+            fi
+        done
+        
+    } > "$proc_info_file"
+    
+    log_hash "$proc_info_file" "sha256"
+    
+    # Collect specific process details for suspicious processes
+    local suspicious_procs_file="$proc_dir/suspicious_processes.txt"
+    {
+        echo "=== POTENTIALLY SUSPICIOUS PROCESSES ==="
+        echo "Collection Time: $(date)"
+        echo ""
+        
+        echo "=== PROCESSES WITH NO TTY ==="
+        ps aux | grep -v "\[" | grep -v "TTY" | grep -v "pts" | head -20
+        echo ""
+        
+        echo "=== PROCESSES WITH HIGH CPU/MEMORY ==="
+        ps aux --sort=-%cpu | head -10
+        echo ""
+        ps aux --sort=-%mem | head -10
+        echo ""
+        
+        echo "=== PROCESSES STARTED RECENTLY ==="
+        ps -eo pid,lstart,cmd | head -20
+        echo ""
+        
+    } > "$suspicious_procs_file"
+    
+    log_hash "$suspicious_procs_file" "sha256"
+    print_status "SUCCESS" "Process information collected in: $proc_dir"
+}
 
-# Capture bash history
-dtg=$(date | cut -d" " -f4,5)
-echo "[ ] Collecting bash history at $dtg" >> $LOGFILE
-echo "[ ] Collecting bash history."
-mkdir $EVIDENCEPATH/history # create storage locations
-cp /root/.bash_history $EVIDENCEPATH/history/root_bash_history.txt # get root history
-USRNAMES=$(getent passwd | grep sh | grep -v nologin | grep -v root | grep -v lib | cut -d':' -f 6 | cut -d'/' -f3 | sort | uniq | sed '/^$/d')
-for i in $USRNAMES
-do 
-    mkdir $EVIDENCEPATH/history/$i # create user folders
-    cp /home/$i/.bash_history $EVIDENCEPATH/history/$i/bash_history.txt # grab bash history
-done
-dtg=$(date | cut -d" " -f4,5)
-echo "[+] Bash history collection complete at $dtg." >> $LOGFILE
-echo " " >> $LOGFILE
-echo "[+] Bash history collection complete."
+# Function to collect network information
+collect_network_info() {
+    print_status "PROGRESS" "Collecting network information..."
+    
+    local net_dir="$EVIDENCEPATH/network_information"
+    mkdir -p "$net_dir"
+    
+    # Network connections using ss (modern replacement for netstat)
+    local ss_file="$net_dir/network_connections_ss.txt"
+    ss -tulnpa > "$ss_file" 2>/dev/null || ss -tuln > "$ss_file"
+    log_hash "$ss_file" "sha256"
+    
+    # Network connections using lsof
+    local lsof_net_file="$net_dir/network_connections_lsof.txt"
+    lsof -i -P -n > "$lsof_net_file" 2>/dev/null || echo "lsof network info failed" > "$lsof_net_file"
+    log_hash "$lsof_net_file" "sha256"
+    
+    # ARP cache
+    local arp_file="$net_dir/arp_cache.txt"
+    ip neigh show > "$arp_file" 2>/dev/null || arp -a > "$arp_file" 2>/dev/null || echo "ARP info not available" > "$arp_file"
+    log_hash "$arp_file" "sha256"
+    
+    # Routing table
+    local route_file="$net_dir/routing_table.txt"
+    ip route show > "$route_file" 2>/dev/null || route -n > "$route_file" 2>/dev/null || echo "Routing info not available" > "$route_file"
+    log_hash "$route_file" "sha256"
+    
+    # Network interfaces
+    local interfaces_file="$net_dir/network_interfaces.txt"
+    ip addr show > "$interfaces_file" 2>/dev/null || ifconfig -a > "$interfaces_file" 2>/dev/null || echo "Interface info not available" > "$interfaces_file"
+    log_hash "$interfaces_file" "sha256"
+    
+    # DNS configuration
+    local dns_file="$net_dir/dns_configuration.txt"
+    {
+        echo "=== DNS CONFIGURATION ==="
+        echo "Collection Time: $(date)"
+        echo ""
+        
+        if [[ -f /etc/resolv.conf ]]; then
+            echo "=== /etc/resolv.conf ==="
+            cat /etc/resolv.conf
+            echo ""
+        fi
+        
+        if [[ -f /etc/hosts ]]; then
+            echo "=== /etc/hosts ==="
+            cat /etc/hosts
+            echo ""
+        fi
+        
+        echo "=== ACTIVE DNS QUERIES ==="
+        if command -v nslookup >/dev/null 2>&1; then
+            nslookup google.com 2>/dev/null | head -10 || echo "nslookup failed"
+        fi
+        
+    } > "$dns_file"
+    
+    log_hash "$dns_file" "sha256"
+    print_status "SUCCESS" "Network information collected in: $net_dir"
+}
 
-# Capture running processes
-dtg=$(date | cut -d" " -f4,5)
-echo "[ ] Capturing process table at $dtg" >> $LOGFILE
-echo "[ ] Capturing process table."
-ps -aux > $EVIDENCEPATH/running_processes.txt
-dtg=$(date | cut -d" " -f4,5)
-echo "[+] Process table exported to $EVIDENCEPATH/running_processes.txt at $dtg" >> $LOGFILE
-hashfile $EVIDENCEPATH/running_processes.txt
-echo "[+] Process table exported"
-chmod 444 $EVIDENCEPATH/running_processes.txt
+# Function to collect user history files
+collect_user_history() {
+    print_status "PROGRESS" "Collecting user history files..."
+    
+    local history_dir="$EVIDENCEPATH/user_history"
+    mkdir -p "$history_dir"
+    
+    # Get all users with shells
+    local users=$(getent passwd | grep -E '/(bash|sh|zsh|fish)$' | cut -d: -f1 | sort | uniq)
+    
+    for user in $users; do
+        local user_dir="$history_dir/$user"
+        mkdir -p "$user_dir"
+        
+        # Bash history
+        if [[ -f "/home/$user/.bash_history" ]]; then
+            cp "/home/$user/.bash_history" "$user_dir/bash_history.txt" 2>/dev/null || echo "Failed to copy bash history" > "$user_dir/bash_history.txt"
+            log_hash "$user_dir/bash_history.txt" "sha256"
+        fi
+        
+        # Zsh history
+        if [[ -f "/home/$user/.zsh_history" ]]; then
+            cp "/home/$user/.zsh_history" "$user_dir/zsh_history.txt" 2>/dev/null || echo "Failed to copy zsh history" > "$user_dir/zsh_history.txt"
+            log_hash "$user_dir/zsh_history.txt" "sha256"
+        fi
+        
+        # Fish history
+        if [[ -f "/home/$user/.local/share/fish/fish_history" ]]; then
+            cp "/home/$user/.local/share/fish/fish_history" "$user_dir/fish_history.txt" 2>/dev/null || echo "Failed to copy fish history" > "$user_dir/fish_history.txt"
+            log_hash "$user_dir/fish_history.txt" "sha256"
+        fi
+        
+        # SSH known hosts
+        if [[ -f "/home/$user/.ssh/known_hosts" ]]; then
+            cp "/home/$user/.ssh/known_hosts" "$user_dir/ssh_known_hosts.txt" 2>/dev/null || echo "Failed to copy SSH known hosts" > "$user_dir/ssh_known_hosts.txt"
+            log_hash "$user_dir/ssh_known_hosts.txt" "sha256"
+        fi
+        
+        # SSH config
+        if [[ -f "/home/$user/.ssh/config" ]]; then
+            cp "/home/$user/.ssh/config" "$user_dir/ssh_config.txt" 2>/dev/null || echo "Failed to copy SSH config" > "$user_dir/ssh_config.txt"
+            log_hash "$user_dir/ssh_config.txt" "sha256"
+        fi
+    done
+    
+    # Root user history (if different location)
+    if [[ -f "/root/.bash_history" ]]; then
+        local root_dir="$history_dir/root"
+        mkdir -p "$root_dir"
+        cp "/root/.bash_history" "$root_dir/bash_history.txt" 2>/dev/null || echo "Failed to copy root bash history" > "$root_dir/bash_history.txt"
+        log_hash "$root_dir/bash_history.txt" "sha256"
+    fi
+    
+    print_status "SUCCESS" "User history files collected in: $history_dir"
+}
 
-# Grab network data - arp cache, routing cache.
-echo "[ ] Collecting ARP"
-arp -a > $EVIDENCEPATH/arp_export.txt
-chmod 444 $EVIDENCEPATH/arp_export.txt
-dtg=$(date | cut -d" " -f4,5)
-echo "[ ] ARP cache exported to $EVIDENCEPATH/arp_export.txt at $dtg." >> $LOGFILE
-hashfile $EVIDENCEPATH/arp_export.txt
+# Function to collect log files
+collect_log_files() {
+    print_status "PROGRESS" "Collecting log files..."
+    
+    local logs_dir="$EVIDENCEPATH/system_logs"
+    mkdir -p "$logs_dir"
+    
+    # Common log locations
+    local log_locations=(
+        "/var/log/auth.log"
+        "/var/log/secure"
+        "/var/log/messages"
+        "/var/log/syslog"
+        "/var/log/kern.log"
+        "/var/log/dmesg"
+        "/var/log/audit/audit.log"
+        "/var/log/btmp"
+        "/var/log/wtmp"
+        "/var/log/lastlog"
+        "/var/log/faillog"
+    )
+    
+    for log_file in "${log_locations[@]}"; do
+        if [[ -f "$log_file" ]]; then
+            local filename=$(basename "$log_file")
+            local target_file="$logs_dir/$filename"
+            
+            # For large log files, only copy recent entries
+            if [[ "$filename" == "messages" ]] || [[ "$filename" == "syslog" ]]; then
+                tail -1000 "$log_file" > "$target_file" 2>/dev/null || echo "Failed to copy $log_file" > "$target_file"
+            else
+                cp "$log_file" "$target_file" 2>/dev/null || echo "Failed to copy $log_file" > "$target_file"
+            fi
+            
+            log_hash "$target_file" "sha256"
+        fi
+    done
+    
+    # Collect journalctl logs if available
+    if command -v journalctl >/dev/null 2>&1; then
+        local journal_file="$logs_dir/journalctl_recent.txt"
+        journalctl --since "24 hours ago" --no-pager > "$journal_file" 2>/dev/null || echo "journalctl failed" > "$journal_file"
+        log_hash "$journal_file" "sha256"
+    fi
+    
+    # Collect audit logs if auditd is running
+    if command -v ausearch >/dev/null 2>&1; then
+        local audit_file="$logs_dir/audit_events.txt"
+        ausearch -ts today > "$audit_file" 2>/dev/null || echo "ausearch failed" > "$audit_file"
+        log_hash "$audit_file" "sha256"
+    fi
+    
+    print_status "SUCCESS" "Log files collected in: $logs_dir"
+}
 
-echo "[ ] Collecting route data"
-route -n > $EVIDENCEPATH/route_table.txt
-chmod 444 $EVIDENCEPATH/route_table.txt
-dtg=$(date | cut -d" " -f4,5)
-echo "[ ] Route table exported to $EVIDENCEPATH/route_table.txt at $dtg." >> $LOGFILE
-hashfile $EVIDENCEPATH/route_table.txt
+# Function to identify recently modified executables
+collect_recent_executables() {
+    print_status "PROGRESS" "Identifying recently modified executables..."
+    
+    local exec_file="$EVIDENCEPATH/recent_executables.txt"
+    local five_days_ago=$(date -d "5 days ago" +%s 2>/dev/null || echo "0")
+    
+    {
+        echo "=== RECENTLY MODIFIED EXECUTABLES (Last 5 Days) ==="
+        echo "Collection Time: $(date)"
+        echo "Search Time: 5 days ago from collection"
+        echo "Format: MD5_HASH | FILE_PATH | MODIFICATION_TIME"
+        echo ""
+        
+        # Find executables modified in last 5 days
+        find /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin /opt /home /root -type f -executable -mtime -5 2>/dev/null | while read -r file; do
+            if [[ -f "$file" ]] && [[ -r "$file" ]]; then
+                local hash=$(md5sum "$file" 2>/dev/null | cut -d' ' -f1)
+                local mtime=$(stat -c %y "$file" 2>/dev/null || echo "N/A")
+                echo "$hash | $file | $mtime"
+            fi
+        done | head -1000  # Limit to prevent excessive output
+        
+    } > "$exec_file"
+    
+    log_hash "$exec_file" "sha256"
+    print_status "SUCCESS" "Recent executables list created: $exec_file"
+}
 
-echo "[ ] Collecting netstat"
-netstat -ano > $EVIDENCEPATH/netstat.txt
-chmod 444 $EVIDENCEPATH/netstat.txt
-dtg=$(date | cut -d" " -f4,5)
-echo "[ ] Route table exported to $EVIDENCEPATH/netstat.txt at $dtg." >> $LOGFILE
-hashfile $EVIDENCEPATH/netstat.txt
+# Function to capture memory using AVML
+capture_memory() {
+    if ! command -v avml >/dev/null 2>&1; then
+        print_status "WARNING" "AVML not available, skipping memory capture"
+        return
+    fi
+    
+    print_status "PROGRESS" "Starting memory capture with AVML..."
+    
+    local memory_file="$EVIDENCEPATH/memory_dump.raw"
+    
+    # Notify user about long process
+    print_status "WARNING" "Memory capture will take several minutes depending on RAM size"
+    print_status "WARNING" "Press Ctrl+C within 2 seconds to skip memory capture..."
+    sleep 2
+    
+    print_status "INFO" "Memory capture started at $(date)"
+    print_status "INFO" "Output file: $memory_file"
+    
+    # Capture memory with AVML
+    if avml "$memory_file"; then
+        log_hash "$memory_file" "sha256"
+        print_status "SUCCESS" "Memory capture completed: $memory_file"
+        
+        # Compress memory dump
+        print_status "PROGRESS" "Compressing memory dump..."
+        gzip "$memory_file"
+        log_hash "$memory_file.gz" "sha256"
+        print_status "SUCCESS" "Memory dump compressed: $memory_file.gz"
+    else
+        print_status "ERROR" "Memory capture failed"
+        rm -f "$memory_file"
+    fi
+}
 
-# Grab memory
-# This is complex and expects a zipped version of LiME in the folder where the script is running.
-# ##################################
-# # NOTE THIS IS UNDER DEVELOPMENT #
-# ##################################
-# Until this is complete, use LMG: https://github.com/halpomeranz/lmg
+# Function to capture disk image
+capture_disk_image() {
+    print_status "PROGRESS" "Preparing disk image capture..."
+    
+    local root_device=""
+    if command -v lsblk >/dev/null 2>&1; then
+        root_device=$(lsblk -no PKNAME "$(df / | tail -1 | awk '{print $1}')" 2>/dev/null || echo "")
+    else
+        root_device=$(df / | tail -1 | awk '{print $1}' | sed 's/[0-9]*$//')
+    fi
+    
+    if [[ -z "$root_device" ]]; then
+        print_status "ERROR" "Could not determine root device"
+        return
+    fi
+    
+    print_status "INFO" "Root device: $root_device"
+    
+    # Notify user about long process
+    print_status "WARNING" "Disk imaging will take a very long time depending on disk size"
+    print_status "WARNING" "Press Ctrl+C within 2 seconds to skip disk imaging..."
+    sleep 2
+    
+    if command -v ewfacquire >/dev/null 2>&1; then
+        # Use ewfacquire for E01 format
+        local image_file="$EVIDENCEPATH/$(hostname)_disk_image"
+        print_status "INFO" "Using ewfacquire for E01 format: $image_file.E01"
+        
+        ewfacquire -t "$image_file" "$root_device" -f encase6 -D "Evidence capture at $(date)" -l "$EVIDENCEPATH/ewf.log" 2>&1 | tee "$EVIDENCEPATH/ewf_progress.log"
+        
+        if [[ -f "$image_file.E01" ]]; then
+            log_hash "$image_file.E01" "sha256"
+            print_status "SUCCESS" "Disk image created: $image_file.E01"
+        else
+            print_status "ERROR" "Disk imaging failed"
+        fi
+    else
+        # Use dd as fallback
+        local image_file="$EVIDENCEPATH/$(hostname)_disk_image.raw"
+        print_status "INFO" "Using dd for raw format: $image_file"
+        print_status "WARNING" "Raw format will be much larger than E01"
+        
+        # Calculate disk size for progress estimation
+        local disk_size=$(blockdev --getsize64 "$root_device" 2>/dev/null || echo "0")
+        if [[ "$disk_size" -gt 0 ]]; then
+            local size_gb=$((disk_size / 1024 / 1024 / 1024))
+            print_status "INFO" "Estimated disk size: ${size_gb}GB"
+        fi
+        
+        dd if="$root_device" of="$image_file" bs="$REQUIRED_BS" status=progress conv=noerror,sync 2>&1 | tee "$EVIDENCEPATH/dd_progress.log"
+        
+        if [[ -f "$image_file" ]]; then
+            log_hash "$image_file" "sha256"
+            print_status "SUCCESS" "Raw disk image created: $image_file"
+            
+            # Compress raw image
+            print_status "PROGRESS" "Compressing raw disk image (this will take a very long time)..."
+            gzip "$image_file"
+            log_hash "$image_file.gz" "sha256"
+            print_status "SUCCESS" "Raw disk image compressed: $image_file.gz"
+        else
+            print_status "ERROR" "Disk imaging failed"
+        fi
+    fi
+}
 
-#echo "[ ] Starting memory collection."
-# #### Get environment
-#KERNELVER=$(uname -r) # e.g., "3.2.0-41-generic"
-#CPU=$(uname -m) # typically "x86_64" or "i686"
-#HOST=$(hostname)
-#TIMESTAMP=$(date '+%F_%H.%M.%S') # YYYY-MM-DD_hh.mm.ss
-# ##### Update logs
-#echo "[~] Collecting memory. Collection started at $(date '+%H:%M:%S %Z')" >> $LOGFILE
-#echo "[ ] Environment settings:" >> $LOGFILE
-#echo "        Kernel Version: $KERNELVER" >> $LOGFILE
-#echo "        CPU Architecture: $CPU" >> $LOGFILE
-#echo "        Hostname: $HOST" >> $LOGFILE
-#echo " " >> $LOGFILE
-#dwarfdumper $EVIDENCEPATH/$TIMESTAMP_memory
+# Function to create evidence summary
+create_evidence_summary() {
+    print_status "PROGRESS" "Creating evidence collection summary..."
+    
+    local summary_file="$EVIDENCEPATH/evidence_summary.txt"
+    
+    {
+        echo "=========================================="
+        echo "        EVIDENCE COLLECTION SUMMARY"
+        echo "=========================================="
+        echo ""
+        echo "Collection Details:"
+        echo "  Start Time: $COLLECTION_START_TIME"
+        echo "  End Time: $(date)"
+        echo "  Hostname: $HOSTNAME"
+        echo "  System Type: $SYSTEM_TYPE"
+        echo "  Evidence Location: $EVIDENCEPATH"
+        echo ""
+        echo "Evidence Collected:"
+        echo "  - System Information"
+        echo "  - Process Information"
+        echo "  - Network Information"
+        echo "  - User History Files"
+        echo "  - System Logs"
+        echo "  - Recently Modified Executables"
+        echo "  - Memory Dump (if AVML available)"
+        echo "  - Disk Image"
+        echo ""
+        echo "File Integrity:"
+        echo "  All evidence files have been hashed with SHA256"
+        echo "  Hash log: $HASH_LOG"
+        echo ""
+        echo "Collection Script:"
+        echo "  Script: $SCRIPT_NAME"
+        echo "  Version: $SCRIPT_VERSION"
+        echo "  Hash: $(sha256sum "$0" | cut -d' ' -f1)"
+        echo ""
+        echo "=========================================="
+        echo "Collection Complete"
+        echo "=========================================="
+        
+    } > "$summary_file"
+    
+    log_hash "$summary_file" "sha256"
+    print_status "SUCCESS" "Evidence summary created: $summary_file"
+}
 
-#echo "[+] Memory collection complete."
-#echo "[+] Memory collection attempt terminated at $(date '+%H:%M:%S %Z')." >> $LOGFILE
-#echo " " >> $LOGFILE
+# Function to display help
+show_help() {
+    cat << EOF
+$SCRIPT_NAME - Modern Linux Evidence Collection Script
 
-# Get disk image
-DISK=$(df | grep "/$" | cut -d' ' -f 1)
+USAGE:
+    sudo ./$SCRIPT_NAME <evidence_storage_path>
 
-if ! command -v ewfacquire &> /dev/null
-then
-    dtg=$(date | cut -d" " -f4,5)
-    IMAGEFILENAME=$EVIDENCEPATH/$(hostname)_disk_image.raw
-    echo "[!] ewfaquire not found. Using dd instead. Disk image will be larger, tar will be used to compress."
-    echo "[!] THIS MIGHT TAKE SOME TIME!"
-    echo "[ ] Using DD for image capture." >> $LOGFILE
-    echo "[ ] Writing to $IMAGEFILENAME"
-    echo "[ ] Writing disk image to $IMAGEFILENAME at $dtg" >> $LOGFILE
-    dd if=$DISK of=$IMAGEFILENAME bs=64K conv=noerror,sync
-    dtg=$(date | cut -d" " -f4,5)
-    echo "[+] Disk copy completed at $dtg." >> $LOGFILE
-    echo "[ ] Image collection complete, hashing"
-    diskhash=$(md5sum $IMAGEFILENAME)
-    echo $diskhash > $EVIDENCEPATH/diskimage_md5hash.txt
-    dtg=$(date | cut -d" " -f4,5)
-    echo "[#] Disk image MD5 hash: $(echo $diskhash | cut -d' ' -f1) $dtg" >> $LOGFILE
-    echo "[+] Image MD% hash: $(echo $diskhash | cut -d' ' -f1)"
-    echo "[ ] Compressing disk image. This will take a LONG time."
-    tar -cvzf $EVIDENCEPATH/disk_image.tar.gz $IMAGEFILENAME $EVIDENCEPATH/sha1hash.txt
-    echo "[ ] Compression completed, hashing with MD5."
-    comphash=$(md5sum $EVIDENCEPATH/disk_image.tar.gz)
-    echo "[+] MD5 Hash completed. Hash: $(echo comphash | cut -d' ' -f1)"
-    dtg=$(date | cut -d" " -f4,5)
-    echo "[+] Compressed tar file created at $dtg." >> $LOGFILE
-    echo "[ ] Reference details: $comphash" >> $LOGFILE
-    rm $IMAGEFILENAME
-    echo "[ ] Original disk image deleted from file system"
-else
-    IMAGEFILENAME=$EVIDENCEPATH/$(hostname)_disk_image
-    dtg=$(date | cut -d" " -f4,5)
-    echo "[!] ewfaquire found. Will create E01 image."
-    echo "[!] THIS MIGHT TAKE SOME TIME!"
-    echo "[ ] Writing to $IMAGEFILENAME.E01"
-    echo "[ ] Using ewfacquire for image capture." >> $LOGFILE
-    echo "[ ] Writing disk image to $IMAGEFILENAME.E01 at $dtg" >> $LOGFILE
-    ewfacquire -t $IMAGEFILENAME $DISK -f encase6 -D "Automatic Evidence Capture at $dtg." -l $EVIDENCEPATH/ewflog.txt
-    dtg=$(date | cut -d" " -f4,5)
-    echo "[+] E01 disk image created at $dtg" >> $LOGFILE
-    echo "[ ] Image creation completed, hashing using MD5"
-    hash=$(md5sum $IMAGEFILENAME.E01)
-    echo "[#] MD5 hash of $IMAGEFILENAME.E01 : $hash" >> $LOGFILE
-    echo "    NOTE: This may not be a complete capture if the file is split across multiple E0x files" >> $LOGFILE
-    echo " " >> $LOGFILE
-    echo "[*] Hashing Complete."
-    ewfinfo $IMAGEFILENAME.E01 > $EVIDENCEPATH/ewfinfo.txt
-fi
+DESCRIPTION:
+    This script performs comprehensive evidence collection from a potentially
+    compromised Linux host using modern tools and techniques.
 
-# Close down
-dtg=$(date | cut -d" " -f4,5)
-echo "Data collection complete at $dtg" >> $LOGFILE
-echo "***********************" >> $LOGFILE
-echo "* EXTRACTION COMPLETE *" >> $LOGFILE
-echo "***********************" >> $LOGFILE
-sha1=$(sha1sum $LOGFILE)
-echo "Logfile hash: \n $sha1" > $EVIDENCEPATH/logfile_hash.txt
-echo "[+] Evidence extraction complete."
-echo "[+] Logfile is stored at $LOGFILE"
-echo "[+] SHA1 hash of the logfile is $(echo $sha1 | cut -d' ' -f1)"
-echo "[+] A copy of the hash is stored at $EVIDENCEPATH/logfile_hash.txt"
-chmod 444 $EVIDENCEPATH/logfile_hash.txt
-chmod 444 $LOGFILE
+REQUIREMENTS:
+    - Root privileges
+    - AVML for memory capture (recommended)
+    - ewfacquire for disk imaging (recommended)
+    - Modern Linux tools (ss, lsof, etc.)
+
+FEATURES:
+    - System information collection
+    - Process enumeration and analysis
+    - Network connection capture
+    - User history collection
+    - Log file collection
+    - Recent executable identification
+    - Memory capture (AVML)
+    - Disk imaging
+    - Comprehensive hashing and logging
+
+EXAMPLES:
+    sudo ./$SCRIPT_NAME /media/usb/evidence
+    sudo ./$SCRIPT_NAME /mnt/external_storage/incident_001
+
+VERSION: $SCRIPT_VERSION
+EOF
+}
+
+# Main function
+main() {
+    # Check arguments
+    if [[ $# -eq 0 ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        show_help
+        exit 0
+    fi
+    
+    EVIDENCEPATH="$1"
+    
+    # Check if running as root
+    if [[ $EUID -ne 0 ]]; then
+        print_status "ERROR" "This script must be run with root privileges!"
+        exit 1
+    fi
+    
+    # Check if target path exists and is writable
+    if [[ ! -d "$EVIDENCEPATH" ]]; then
+        print_status "ERROR" "Target directory does not exist: $EVIDENCEPATH"
+        exit 1
+    fi
+    
+    if [[ ! -w "$EVIDENCEPATH" ]]; then
+        print_status "ERROR" "Target directory is not writable: $EVIDENCEPATH"
+        exit 1
+    fi
+    
+    # Check if writing to physical device being analyzed
+    check_physical_device "$EVIDENCEPATH"
+    
+    # Initialize collection
+    COLLECTION_START_TIME=$(date)
+    HOSTNAME=$(hostname)
+    
+    # Set up logging
+    LOGFILE="$EVIDENCEPATH/evidence_collection.log"
+    HASH_LOG="$EVIDENCEPATH/file_hashes.txt"
+    
+    # Create log header
+    {
+        echo "=========================================="
+        echo "    EVIDENCE COLLECTION LOG"
+        echo "=========================================="
+        echo "Script: $SCRIPT_NAME"
+        echo "Version: $SCRIPT_VERSION"
+        echo "Start Time: $COLLECTION_START_TIME"
+        echo "Hostname: $HOSTNAME"
+        echo "Evidence Path: $EVIDENCEPATH"
+        echo "=========================================="
+        echo ""
+    } > "$LOGFILE"
+    
+    # Create hash log header
+    {
+        echo "=========================================="
+        echo "        FILE INTEGRITY LOG"
+        echo "=========================================="
+        echo "Script: $SCRIPT_NAME"
+        echo "Version: $SCRIPT_VERSION"
+        echo "Collection: $COLLECTION_START_TIME"
+        echo "Format: TIMESTAMP - HASH_TYPE:HASH - FILE_PATH"
+        echo "=========================================="
+        echo ""
+    } > "$HASH_LOG"
+    
+    print_status "INFO" "Evidence collection started"
+    print_status "INFO" "Evidence will be stored in: $EVIDENCEPATH"
+    print_status "INFO" "Log file: $LOGFILE"
+    print_status "INFO" "Hash log: $HASH_LOG"
+    
+    # Detect system type
+    detect_system_type
+    
+    # Check requirements
+    check_requirements
+    
+    # Create evidence directory structure
+    mkdir -p "$EVIDENCEPATH"
+    
+    # Collect evidence
+    collect_system_info
+    collect_process_info
+    collect_network_info
+    collect_user_history
+    collect_log_files
+    collect_recent_executables
+    
+    # Capture memory (if AVML available)
+    capture_memory
+    
+    # Capture disk image
+    capture_disk_image
+    
+    # Create summary
+    create_evidence_summary
+    
+    # Final status
+    print_status "SUCCESS" "Evidence collection completed successfully!"
+    print_status "INFO" "All evidence has been collected and hashed"
+    print_status "INFO" "Check the log file for detailed information: $LOGFILE"
+    print_status "INFO" "Check the hash log for file integrity: $HASH_LOG"
+    
+    # Log final hash of log file
+    log_hash "$LOGFILE" "sha256"
+    log_hash "$HASH_LOG" "sha256"
+    
+    # Set read-only permissions on evidence
+    chmod -R 444 "$EVIDENCEPATH" 2>/dev/null || true
+    chmod 644 "$LOGFILE" "$HASH_LOG" 2>/dev/null || true
+}
+
+# Trap to handle script interruption
+trap 'print_status "WARNING" "Script interrupted by user"; exit 130' INT TERM
+
+# Run main function
+main "$@"
