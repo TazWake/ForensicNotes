@@ -8,7 +8,7 @@
 #              Uses tools like AVML for memory capture and improved process enumeration                                             #                     #
 # Requirements: Root privileges, AVML, Linux tools (ss, lsof, etc.)                                                                 #
 # Usage: sudo ./linux_data_collection.sh /path/to/storage/device                                                                    #
-# Note: This script is designed to work on RHEL and Ubuntu systems. It may have unexpected behaviour on other distributions.         #
+# Note: This script is designed to work on RHEL and Ubuntu systems. It may have unexpected behaviour on other distributions.        #
 # ================================================================================================================================= #
 
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
